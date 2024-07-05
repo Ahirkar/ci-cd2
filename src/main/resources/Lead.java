@@ -1,5 +1,4 @@
 package com.javachap.domain;
-
 public interface Lead extends Domain{
 	
 	enum Status {New, Published}
