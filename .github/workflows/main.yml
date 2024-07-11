@@ -1,0 +1,120 @@
+name: Dev & QA ossom-backed
+on: 
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+             
+### A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  envbranch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        
+      - name: Check the branch and select the envirnoment
+        id: branch_check
+        run: |
+          echo "Running on branch ${{ github.ref }}"
+          if [ "${{ github.ref }}" = "refs/heads/dev" ]; then
+            echo "env_name=DevBuild" >> $GITHUB_OUTPUT
+          fi
+      - name: Use variable setup in previous step
+        run: echo "Using envirnoment ${{ steps.branch_check.outputs.env_name }}"
+    outputs:
+      env_name: ${{ steps.branch_check.outputs.env_name }}
+  build:  
+    runs-on: ubuntu-latest
+    needs: envbranch
+    
+    environment: ${{ needs.envbranch.outputs.env_name }}
+      #name: ${{ needs.envbranch.outputs.env_name }}  
+    env:
+      duplo_token: ${{ secrets.DUPLO_TOKEN }}
+      TENANT_NAME: ${{ vars.TENANT_NAME }}
+      SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+      DUPLO_HOST: ${{ vars.DUPLO_HOST }}    
+    steps: 
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '16'
+      - name: Build with Maven
+        working-directory: ossom-backend
+        run: |
+          pwd
+          mvn clean install
+          ls -l
+      - name: Get AWS credentials
+        uses: duplocloud/ghactions-aws-jit@master
+        with:
+          tenant: ${{ env.TENANT_NAME }}
+          duplo_host: ${{ vars.DUPLO_HOST }}
+          duplo_token: ${{ secrets.DUPLO_TOKEN }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1  
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ossom-backend
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ needs.envbranch.outputs.env_name }}-${{ github.sha }}
+    outputs:
+      image: "${{ steps.login-ecr.outputs.registry }}/${{ env.SERVICE_NAME }}:${{ needs.envbranch.outputs.env_name }}-${{ github.sha }}"
+  DeployOnDev:
+    runs-on: ubuntu-latest
+    needs: 
+      - envbranch
+      - build
+    if: ${{ always() && needs.build.result == 'success' }}  
+#    if: ${{ always() }}
+      
+    environment:
+      name: Dev
+    env:
+      duplo_token: "${{ secrets.DUPLO_TOKEN }}"
+      TENANT_NAME: "${{ vars.TENANT_NAME }}"
+      SERVICE_NAME: "${{ vars.SERVICE_NAME }}"
+      duplo_host: "${{ vars.duplo_host }}"
+      
+    steps:    
+      # Update the backend service to use the new image.
+      - name: Deploy
+        uses: duplocloud/ghactions-service-update@master
+        with:
+          tenant: "${{ env.TENANT_NAME }}"
+          services: |-
+            [
+              { "Name": "${{ env.SERVICE_NAME }}", "Image": "${{ needs.build.outputs.image }}" }
+            ]
+  deployOnQA:
+    runs-on: ubuntu-latest
+    needs: 
+      - envbranch
+      - build
+      - DeployOnDev
+    if: ${{ always() && needs.build.result == 'success' }}  
+#    if: ${{ always() }}
+    environment:
+     name: QA
+    env:
+      duplo_token: "${{ secrets.DUPLO_TOKEN }}"
+      TENANT_NAME: "${{ vars.TENANT_NAME }}"
+      SERVICE_NAME: "${{ vars.SERVICE_NAME }}"
+      duplo_host: "${{ vars.duplo_host }}"
+    steps:  
+      # Update the backend service to use the new image.
+      - name: Deploy on QA
+        uses: duplocloud/ghactions-service-update@master
+        with:
+          tenant: "${{ env.TENANT_NAME }}"
+          services: |-
+            [
+              { "Name": "${{ env.SERVICE_NAME }}", "Image": "${{ needs.build.outputs.image }}" }
+            ]
