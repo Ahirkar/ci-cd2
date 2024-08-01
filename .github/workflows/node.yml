@@ -3,9 +3,7 @@ on:
   # Triggers the workflow on push to matching branches
   push:
     branches:
-      - master
-      - pilot
-      - prod
+      - dev 
       
   workflow_dispatch:
              
